@@ -1,5 +1,5 @@
 # pylint: disable=duplicate-code
-"""Support for IntesisHome and airconwithme Smart AC Controllers."""
+"""Support for IntesisHome Local Smart AC Controllers."""
 from __future__ import annotations
 
 import logging
@@ -10,17 +10,9 @@ from pyintesishome import (
     IHAuthenticationError,
     IHConnectionError,
     IntesisBase,
-    IntesisBox,
-    IntesisHome,
     IntesisHomeLocal,
 )
-from pyintesishome.const import (
-    DEVICE_AIRCONWITHME,
-    DEVICE_ANYWAIR,
-    DEVICE_INTESISBOX,
-    DEVICE_INTESISHOME,
-    DEVICE_INTESISHOME_LOCAL,
-)
+from pyintesishome.const import DEVICE_INTESISHOME_LOCAL
 
 from homeassistant import config_entries, core
 from homeassistant.components.climate import ClimateEntity
@@ -38,7 +30,6 @@ from homeassistant.components.climate import (
 )
 from homeassistant.const import (
     ATTR_TEMPERATURE,
-    CONF_DEVICE,
     CONF_HOST,
     CONF_PASSWORD,
     CONF_USERNAME,
@@ -50,7 +41,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
-
 from . import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -58,7 +48,6 @@ _LOGGER = logging.getLogger(__name__)
 
 class SwingSettings(NamedTuple):
     """Settings for swing mode."""
-
     vvane: str
     hvane: str
 
@@ -89,7 +78,6 @@ MAP_SWING_TO_IH = {
     SWING_VERTICAL: SwingSettings(vvane=IH_SWING_SWING, hvane=IH_SWING_STOP),
 }
 
-
 MAP_STATE_ICONS = {
     HVACMode.COOL: "mdi:snowflake",
     HVACMode.DRY: "mdi:water-off",
@@ -100,8 +88,6 @@ MAP_STATE_ICONS = {
 
 MAX_RETRIES = 10
 MAX_WAIT_TIME = 300
-
-
 async def async_setup_entry(
     hass: core.HomeAssistant,
     config_entry: config_entries.ConfigEntry,
@@ -134,31 +120,19 @@ async def async_setup_platform(
     ih_user = config.get(CONF_USERNAME)
     ih_host = config.get(CONF_HOST)
     ih_pass = config.get(CONF_PASSWORD)
-    device_type = config.get(CONF_DEVICE)
     websession = async_get_clientsession(hass)
 
-    if device_type == DEVICE_INTESISBOX:
-        controller = IntesisBox(config[CONF_HOST], loop=hass.loop)
-        await controller.connect()
-    elif device_type == DEVICE_INTESISHOME_LOCAL:
-        controller = IntesisHomeLocal(
-            ih_host, ih_user, ih_pass, loop=hass.loop, websession=websession
-        )
-    else:
-        controller = IntesisHome(
-            ih_user,
-            ih_pass,
-            hass.loop,
-            websession=async_get_clientsession(hass),
-            device_type=device_type,
-        )
+    controller = IntesisHomeLocal(
+        ih_host, ih_user, ih_pass, loop=hass.loop, websession=websession
+    )
+
     try:
         await controller.poll_status()
     except IHAuthenticationError:
         _LOGGER.error("Invalid username or password")
         return
     except IHConnectionError as ex:
-        _LOGGER.error("Error connecting to the %s server", device_type)
+        _LOGGER.error("Error connecting to the IntesisHome local device")
         raise PlatformNotReady from ex
 
     if ih_devices := controller.get_devices():
@@ -171,14 +145,10 @@ async def async_setup_platform(
         )
     else:
         _LOGGER.error(
-            "Error getting device list from %s API: %s",
-            device_type,
+            "Error getting device list from IntesisHome local API: %s",
             controller.error_message,
         )
         await controller.stop()
-
-
-# pylint: disable=too-many-instance-attributes, too-many-arguments, too-many-public-methods
 class IntesisAC(ClimateEntity):
     """Represents an Intesishome air conditioning device."""
 
@@ -207,13 +177,15 @@ class IntesisAC(ClimateEntity):
         self._hvane: str = None
         self._power: bool = False
         self._fan_speed = None
-        self._attr_supported_features = 0
         self._power_consumption_heat = None
         self._power_consumption_cool = None
+        
+        # Inizializzazione delle feature supportate
+        self._attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
 
-        # Setpoint support
-        if controller.has_setpoint_control(ih_device_id):
-            self._attr_supported_features |= ClimateEntityFeature.TARGET_TEMPERATURE
+        # Aggiunta esplicita del supporto turn_on/turn_off
+        self._attr_supported_features |= ClimateEntityFeature.TURN_ON
+        self._attr_supported_features |= ClimateEntityFeature.TURN_OFF
 
         # Setup swing list
         if controller.has_vertical_swing(ih_device_id):
@@ -250,14 +222,12 @@ class IntesisAC(ClimateEntity):
         _LOGGER.debug("Added climate device with state: %s", repr(self._ih_device))
         self._controller.add_update_callback(self.async_update_callback)
 
-        if self._device_type is not DEVICE_INTESISBOX:
-            try:
-                await self._controller.connect()
-            except IHConnectionError as ex:
-                _LOGGER.error("Exception connecting to IntesisHome: %s", ex)
-                raise PlatformNotReady from ex
-
-    @property
+        try:
+            await self._controller.connect()
+        except IHConnectionError as ex:
+            _LOGGER.error("Exception connecting to IntesisHome: %s", ex)
+            raise PlatformNotReady from ex
+@property
     def name(self):
         """Return the name of the AC device."""
         return self._device_name
@@ -365,8 +335,7 @@ class IntesisAC(ClimateEntity):
             await self._controller.set_horizontal_vane(
                 self._device_id, swing_settings.hvane
             )
-
-    async def async_update(self):
+async def async_update(self):
         """Copy values from controller dictionary to climate device."""
         # Update values from controller's device dictionary
         self._connected = self._controller.is_connected
@@ -375,8 +344,6 @@ class IntesisAC(ClimateEntity):
         self._power = self._controller.is_on(self._device_id)
         self._min_temp = self._controller.get_min_setpoint(self._device_id)
         self._max_temp = self._controller.get_max_setpoint(self._device_id)
-        self._rssi = self._controller.get_rssi(self._device_id)
-        self._run_hours = self._controller.get_run_hours(self._device_id)
         self._target_temp = self._controller.get_setpoint(self._device_id)
         self._outdoor_temp = self._controller.get_outdoor_temperature(self._device_id)
 
@@ -389,27 +356,16 @@ class IntesisAC(ClimateEntity):
         self._preset = MAP_IH_TO_PRESET_MODE.get(preset)
 
         # Swing mode
-        # Climate module only supports one swing setting.
         self._vvane = self._controller.get_vertical_swing(self._device_id)
         self._hvane = self._controller.get_horizontal_swing(self._device_id)
 
-        # Power usage
+        # Power consumption
         self._power_consumption_heat = self._controller.get_heat_power_consumption(
             self._device_id
         )
         self._power_consumption_cool = self._controller.get_cool_power_consumption(
             self._device_id
         )
-
-        if not self._attr_supported_features:
-            if self._fan_modes:
-                self._attr_supported_features |= ClimateEntityFeature.FAN_MODE
-            if self._controller.has_setpoint_control(self._device_id):
-                self._attr_supported_features |= ClimateEntityFeature.TARGET_TEMPERATURE
-            if len(self._swing_list) > 1:
-                self._attr_supported_features |= ClimateEntityFeature.SWING_MODE
-            if self._ih_device.get("climate_working_mode"):
-                self._attr_supported_features |= ClimateEntityFeature.PRESET_MODE
 
     async def async_will_remove_from_hass(self):
         """Shutdown the controller when the device is being removed."""
@@ -432,46 +388,36 @@ class IntesisAC(ClimateEntity):
             # Connection has dropped
             self._connected = False
             reconnect_seconds = 30
-            if self._device_type in [
-                DEVICE_INTESISHOME,
-                DEVICE_ANYWAIR,
-                DEVICE_AIRCONWITHME,
-            ]:
-                # Add a random delay for cloud connections
-                reconnect_seconds = randrange(30, 600)
 
             _LOGGER.info(
-                "Connection to %s API was lost. Reconnecting in %i seconds",
-                self._device_type,
+                "Connection to IntesisHome Local API was lost. Reconnecting in %i seconds",
                 reconnect_seconds,
             )
 
             async def try_connect(retries):
                 try:
                     await self._controller.connect()
-                    _LOGGER.info("Reconnected to %s API", self._device_type)
+                    _LOGGER.info("Reconnected to IntesisHome Local API")
                 except IHConnectionError:
                     if retries < MAX_RETRIES:
                         wait_time = min(2**retries, MAX_WAIT_TIME)
                         _LOGGER.info(
-                            "Failed to reconnect to %s API. Retrying in %i seconds",
-                            self._device_type,
+                            "Failed to reconnect to IntesisHome Local API. Retrying in %i seconds",
                             wait_time,
                         )
                         async_call_later(self.hass, wait_time, try_connect(retries + 1))
                     else:
                         _LOGGER.error(
-                            "Failed to reconnect to %s API after %i retries. Giving up",
-                            self._device_type,
+                            "Failed to reconnect to IntesisHome Local API after %i retries. Giving up",
                             MAX_RETRIES,
                         )
 
-                async_call_later(self.hass, reconnect_seconds, try_connect(0))
+            async_call_later(self.hass, reconnect_seconds, try_connect(0))
 
         if self._controller.is_connected and not self._connected:
             # Connection has been restored
             self._connected = True
-            _LOGGER.debug("Connection to %s API was restored", self._device_type)
+            _LOGGER.debug("Connection to IntesisHome Local API was restored")
 
         if not device_id or self._device_id == device_id:
             # Update all devices if no device_id was specified
