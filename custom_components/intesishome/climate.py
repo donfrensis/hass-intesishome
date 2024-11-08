@@ -225,7 +225,7 @@ class IntesisAC(ClimateEntity):
         try:
             await self._controller.connect()
         except IHConnectionError as ex:
-            _LOGGER.error("Exception connecting to IntesisHome: %s", ex)
+            _LOGGER.error("Exception connecting to IntesisHome Local: %s", ex)
             raise PlatformNotReady from ex
 @property
     def name(self):
