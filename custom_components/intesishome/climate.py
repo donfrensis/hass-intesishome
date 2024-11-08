@@ -230,7 +230,7 @@ class IntesisAC(ClimateEntity):
             _LOGGER.error("Exception connecting to IntesisHome: %s", ex)
             raise PlatformNotReady from ex
 # fine parte 3 - inizio parte 4
-@property
+    @property
     def name(self):
         """Return the name of the AC device."""
         return self._device_name
